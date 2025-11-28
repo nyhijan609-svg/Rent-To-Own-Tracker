@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rent-to-Own Balance Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Set Firebase debug level
+        setLogLevel('Debug');
+
+        // Global constants and variables
+        const STARTING_BALANCE = 90000; // Your initial rent-to-own balance
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // Shared collection path for collaboration
+        const SHARED_COLLECTION_PATH = `/artifacts/${appId}/public/data/rent_to_own_ledger`;
+
+        let db;
+        let auth;
+        let userId = null;
+        let payments = []; // Array to hold all transaction objects
+
+        // --- Utility Functions ---
+
+        // Converts a number to a USD currency string
+        const formatCurrency = (amount) => {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+        };
+
+        // --- Firebase Initialization and Auth ---
+
+        const initFirebase = async () => {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('user-id-display').textContent = userId + ' (Shared Data)';
+                        // Once authenticated, start listening for data
+                        startDataListener();
+                    } else {
+                        // Not authenticated, sign in anonymously or with token
+                        handleAuth();
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+                document.getElementById('status-message').textContent = 'Error: Firebase failed to initialize.';
+            }
+        };
+
+        const handleAuth = async () => {
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Authentication failed:", error);
+                document.getElementById('status-message').textContent = 'Error: Authentication failed. Check console for details.';
+            }
+        };
+
+
+        // --- Firestore Data Listener ---
+
+        const startDataListener = () => {
+            if (!db || !userId) {
+                console.warn('Database or User ID not ready.');
+                return;
+            }
+
+            // Using the shared collection path
+            const paymentsRef = collection(db, SHARED_COLLECTION_PATH);
+            const q = query(paymentsRef, orderBy("timestamp", "desc")); // Order by latest first
+
+            onSnapshot(q, (snapshot) => {
+                payments = [];
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    payments.push({
+                        id: doc.id,
+                        date: data.date,
+                        amount: data.amount,
+                        type: data.type,
+                        timestamp: data.timestamp ? data.timestamp.toDate() : new Date(data.date),
+                    });
+                });
+
+                // Recalculate and render everything whenever data changes
+                recalculateAndRender();
+            }, (error) => {
+                console.error("Error listening to Firestore:", error);
+                document.getElementById('status-message').textContent = 'Error: Failed to fetch data. See console.';
+            });
+        };
+
+        // --- Calculation and Rendering ---
+
+        const recalculateAndRender = () => {
+            const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+            const remainingBalance = STARTING_BALANCE - totalPaid;
+
+            renderSummary(totalPaid, remainingBalance);
+            renderTransactions();
+            renderMonthlySummary();
+        };
+
+        const renderSummary = (totalPaid, remainingBalance) => {
+            const remainingPercent = (remainingBalance / STARTING_BALANCE) * 100;
+            const paidPercent = 100 - remainingPercent;
+            const remainingDisplay = document.getElementById('remaining-balance');
+            const paidDisplay = document.getElementById('total-paid');
+
+            // 1. Update values
+            document.getElementById('starting-balance').textContent = formatCurrency(STARTING_BALANCE);
+            remainingDisplay.textContent = formatCurrency(remainingBalance);
+            paidDisplay.textContent = formatCurrency(totalPaid);
+
+            // 2. Conditional Formatting (Color Coding)
+            remainingDisplay.classList.remove('text-red-600', 'text-yellow-600', 'text-blue-600', 'text-green-600');
+
+            let balanceColorClass;
+            if (remainingPercent >= 75) {
+                balanceColorClass = 'text-red-600'; // High remaining balance
+            } else if (remainingPercent >= 50) {
+                balanceColorClass = 'text-yellow-600';
+            } else if (remainingPercent >= 25) {
+                balanceColorClass = 'text-blue-600';
+            } else {
+                balanceColorClass = 'text-green-600'; // Low remaining balance
+            }
+            remainingDisplay.classList.add(balanceColorClass);
+
+            // 3. Render Chart (Progress Bar)
+            const progressBar = document.getElementById('progress-bar-fill');
+            progressBar.style.width = `${Math.min(100, paidPercent)}%`;
+            progressBar.classList.remove('bg-red-500', 'bg-yellow-500', 'bg-blue-500', 'bg-green-500');
+
+            let progressColorClass;
+            if (paidPercent < 25) {
+                progressColorClass = 'bg-red-500';
+            } else if (paidPercent < 50) {
+                progressColorClass = 'bg-yellow-500';
+            } else if (paidPercent < 75) {
+                progressColorClass = 'bg-blue-500';
+            } else {
+                progressColorClass = 'bg-green-500';
+            }
+            progressBar.classList.add(progressColorClass);
+            document.getElementById('progress-percent').textContent = `${paidPercent.toFixed(1)}% Paid`;
+        };
+
+        const renderTransactions = () => {
+            const tbody = document.getElementById('transaction-history-body');
+            tbody.innerHTML = ''; // Clear previous entries
+
+            if (payments.length === 0) {
+                 tbody.innerHTML = '<tr><td colspan="4" class="py-4 text-center text-gray-500">No payments recorded yet.</td></tr>';
+                 return;
+            }
+
+            payments.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.className = 'border-b hover:bg-gray-50';
+                tr.innerHTML = `
+                    <td class="px-6 py-3 whitespace-nowrap text-sm font-medium text-gray-900">${p.timestamp.toLocaleDateString()}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500">${p.type}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-green-600 font-semibold">${formatCurrency(p.amount)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        };
+
+        const renderMonthlySummary = () => {
+            const summaryBody = document.getElementById('monthly-summary-body');
+            summaryBody.innerHTML = ''; // Clear previous entries
+
+            const monthlyTotals = payments.reduce((acc, p) => {
+                const monthKey = p.timestamp.getFullYear() + '-' + (p.timestamp.getMonth() + 1).toString().padStart(2, '0');
+                acc[monthKey] = (acc[monthKey] || 0) + p.amount;
+                return acc;
+            }, {});
+
+            const sortedMonths = Object.keys(monthlyTotals).sort().reverse();
+
+            if (sortedMonths.length === 0) {
+                summaryBody.innerHTML = '<tr><td colspan="2" class="py-4 text-center text-gray-500">No monthly totals available.</td></tr>';
+                return;
+            }
+
+            sortedMonths.forEach(monthKey => {
+                const [year, month] = monthKey.split('-');
+                const monthName = new Date(year, month - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+                const total = monthlyTotals[monthKey];
+
+                const tr = document.createElement('tr');
+                tr.className = 'border-b bg-indigo-50/50';
+                tr.innerHTML = `
+                    <td class="px-6 py-3 whitespace-nowrap text-sm font-medium text-gray-900">${monthName}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm font-bold text-indigo-700">${formatCurrency(total)}</td>
+                `;
+                summaryBody.appendChild(tr);
+            });
+        };
+
+        // --- Form Submission Logic ---
+
+        const handleFormSubmit = async (event) => {
+            event.preventDefault();
+            
+            if (!userId) {
+                document.getElementById('status-message').textContent = 'Error: Authentication not complete. Please wait.';
+                return;
+            }
+
+            const amountInput = document.getElementById('payment-amount');
+            const typeInput = document.getElementById('payment-type');
+
+            const amount = parseFloat(amountInput.value);
+            const type = typeInput.value;
+
+            if (isNaN(amount) || amount <= 0) {
+                document.getElementById('form-message').textContent = 'Please enter a valid positive payment amount.';
+                return;
+            }
+
+            const newPayment = {
+                amount: amount,
+                type: type,
+                date: new Date().toISOString(), // Store ISO string for date
+                timestamp: new Date(), // Store JS Date object for Firestore Timestamp
+            };
+
+            try {
+                // Using the shared collection path
+                const paymentsRef = collection(db, SHARED_COLLECTION_PATH);
+                await addDoc(paymentsRef, newPayment);
+
+                // Clear form inputs
+                amountInput.value = '';
+                typeInput.value = 'Monthly';
+                document.getElementById('form-message').textContent = 'Payment recorded successfully!';
+                
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                document.getElementById('form-message').textContent = 'Error: Could not save payment.';
+            }
+
+            // Clear the success/error message after a few seconds
+            setTimeout(() => {
+                document.getElementById('form-message').textContent = '';
+            }, 3000);
+        };
+
+        // --- Initialize on load ---
+        window.onload = () => {
+            initFirebase();
+            document.getElementById('payment-form').addEventListener('submit', handleFormSubmit);
+        };
+
+    </script>
+    <style>
+        .progress-bar-container {
+            height: 1.5rem;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+        .progress-bar-fill {
+            height: 100%;
+            transition: width 0.5s ease-in-out;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans p-4 sm:p-8">
+
+    <div class="max-w-7xl mx-auto space-y-8">
+        <header class="text-center">
+            <h1 class="text-4xl font-extrabold text-indigo-700">Rent-to-Own Balance Monitor</h1>
+            <p class="mt-2 text-gray-600" id="status-message">Connecting to database...</p>
+             <p class="text-xs text-gray-400 mt-1">User ID: <span id="user-id-display" class="font-mono break-all"></span></p>
+             <p class="text-xs text-green-600 font-semibold">
+                This data is now shared. Anyone with the app link can view and add payments.
+             </p>
+        </header>
+
+        <!-- Current Balance Summary -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            
+            <!-- Left Side: Static Starting Total -->
+            <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-gray-400">
+                <p class="text-sm font-medium text-gray-500">Starting Total (Static)</p>
+                <!-- Static display text also updated here -->
+                <p id="starting-balance" class="mt-1 text-3xl font-bold text-gray-900">$90,000.00</p>
+            </div>
+
+            <!-- Middle: Total Paid -->
+            <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
+                <p class="text-sm font-medium text-gray-500">Total Paid to Date</p>
+                <p id="total-paid" class="mt-1 text-3xl font-bold text-blue-600">--</p>
+            </div>
+
+            <!-- Right Side: Dynamic Remaining Balance (Conditional Formatting) -->
+            <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-indigo-500">
+                <p class="text-sm font-medium text-gray-500">Remaining Balance (Dynamic)</p>
+                <p id="remaining-balance" class="mt-1 text-4xl font-extrabold transition-colors duration-500">--</p>
+            </div>
+        </div>
+
+        <!-- Progress Chart -->
+        <div class="bg-white p-6 rounded-xl shadow-lg">
+            <h2 class="text-xl font-semibold text-gray-700 mb-4">Payment Progress Chart</h2>
+            <div class="progress-bar-container bg-gray-200">
+                <div id="progress-bar-fill" class="progress-bar-fill" style="width: 0%;">
+                    <span id="progress-percent">0.0% Paid</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Payment Entry Form and Monthly Summary -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <!-- Payment Entry Form -->
+            <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4">Record a New Payment</h2>
+                <form id="payment-form" class="space-y-4">
+                    
+                    <div>
+                        <label for="payment-amount" class="block text-sm font-medium text-gray-700">Payment Amount ($)</label>
+                        <input type="number" step="0.01" id="payment-amount" required
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border">
+                    </div>
+
+                    <div>
+                        <label for="payment-type" class="block text-sm font-medium text-gray-700">Payment Type (Drop-down)</label>
+                        <select id="payment-type" required
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border bg-white">
+                            <option value="Monthly">Monthly Rent-to-Own</option>
+                            <option value="Bonus">Bonus/Extra Payment</option>
+                        </select>
+                    </div>
+
+                    <button type="submit"
+                            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:text-sm transition duration-150">
+                        Log Payment
+                    </button>
+                    <p id="form-message" class="text-center text-sm font-medium pt-2 text-green-600"></p>
+                </form>
+            </div>
+
+            <!-- Automatic Monthly Totals Summary -->
+            <div class="bg-white p-6 rounded-xl shadow-lg">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4">Monthly Contribution Summary</h2>
+                <div class="overflow-y-auto max-h-80">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50 sticky top-0">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Month</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Paid</th>
+                            </tr>
+                        </thead>
+                        <tbody id="monthly-summary-body" class="bg-white divide-y divide-gray-200">
+                            <!-- Monthly summary rows will be injected here -->
+                            <tr><td colspan="2" class="py-4 text-center text-gray-500">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Transaction History Table -->
+        <div class="bg-white p-6 rounded-xl shadow-lg">
+            <h2 class="text-xl font-semibold text-gray-700 mb-4">Payment History</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody id="transaction-history-body" class="bg-white divide-y divide-gray-200">
+                        <!-- Transaction history rows will be injected here -->
+                        <tr><td colspan="3" class="py-4 text-center text-gray-500">Loading history...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>
