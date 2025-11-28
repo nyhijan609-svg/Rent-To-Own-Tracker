@@ -19,15 +19,15 @@
 
         // --- IMPORTANT: EXTERNAL CONFIGURATION (FOR GITHUB PAGES) ---
         // WHEN HOSTING EXTERNALLY, you MUST update the values below with your
-        // OWN Firebase project's Web App Configuration details.
+        // OWN Firebase project's Web App Configuration details (See Deployment Guide).
         // ------------------------------------------------------------------
         const EXTERNAL_FIREBASE_CONFIG = {
-  apiKey: "AIzaSyCxoVyaPJrpwWrSM6Jo23k8TSIxUPzx7tg",
-  authDomain: "rent-to-own-tracker.firebaseapp.com",
-  projectId: "rent-to-own-tracker",
-  storageBucket: "rent-to-own-tracker.firebasestorage.app",
-  messagingSenderId: "589029808960",
-  appId: "1:589029808960:web:617fb5b1678da93a0d78a5"
+            apiKey: "AIzaSyCxoVyaPJrpwWrSM6Jo23k8TSIxUPzx7tg",
+            authDomain: "rent-to-own-tracker.firebaseapp.com",
+            projectId: "rent-to-own-tracker",
+            storageBucket: "rent-to-own-tracker.firebasestorage.app",
+            messagingSenderId: "589029808960",
+            appId: "1:589029808960:web:617fb5b1678da93a0d78a5"
         };
         
         // Environment variables provided by the Canvas (used here for backward compatibility):
@@ -42,7 +42,7 @@
         
         // Determine the collection path:
         // Use the Canvas-specific path if in the Canvas environment, otherwise use a simple path
-        // which works with your own Firebase Security Rules (you will need to configure these).
+        // which works with the public Firebase Security Rules (Step 3 in the Deployment Guide).
         const SHARED_COLLECTION_PATH = isCanvasEnvironment 
             ? `/artifacts/${canvasAppId}/public/data/rent_to_own_ledger` 
             : 'rent_to_own_ledger'; // Simple path for external hosting
