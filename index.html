@@ -16,13 +16,37 @@
 
         // Global constants and variables
         const STARTING_BALANCE = 90000; // Your initial rent-to-own balance
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        
-        // Shared collection path for collaboration
-        const SHARED_COLLECTION_PATH = `/artifacts/${appId}/public/data/rent_to_own_ledger`;
 
+        // --- IMPORTANT: EXTERNAL CONFIGURATION (FOR GITHUB PAGES) ---
+        // WHEN HOSTING EXTERNALLY, you MUST update the values below with your
+        // OWN Firebase project's Web App Configuration details.
+        // ------------------------------------------------------------------
+        const EXTERNAL_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCxoVyaPJrpwWrSM6Jo23k8TSIxUPzx7tg",
+  authDomain: "rent-to-own-tracker.firebaseapp.com",
+  projectId: "rent-to-own-tracker",
+  storageBucket: "rent-to-own-tracker.firebasestorage.app",
+  messagingSenderId: "589029808960",
+  appId: "1:589029808960:web:617fb5b1678da93a0d78a5"
+        };
+        
+        // Environment variables provided by the Canvas (used here for backward compatibility):
+        const canvasAppId = typeof __app_id !== 'undefined' ? __app_id : null;
+        const canvasFirebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Determine which configuration to use:
+        // Use Canvas config if available, otherwise use the static EXTERNAL_FIREBASE_CONFIG.
+        const isCanvasEnvironment = canvasAppId && Object.keys(canvasFirebaseConfig).length > 0;
+        const firebaseConfig = isCanvasEnvironment ? canvasFirebaseConfig : EXTERNAL_FIREBASE_CONFIG;
+        
+        // Determine the collection path:
+        // Use the Canvas-specific path if in the Canvas environment, otherwise use a simple path
+        // which works with your own Firebase Security Rules (you will need to configure these).
+        const SHARED_COLLECTION_PATH = isCanvasEnvironment 
+            ? `/artifacts/${canvasAppId}/public/data/rent_to_own_ledger` 
+            : 'rent_to_own_ledger'; // Simple path for external hosting
+        
         let db;
         let auth;
         let userId = null;
@@ -38,6 +62,12 @@
         // --- Firebase Initialization and Auth ---
 
         const initFirebase = async () => {
+            // Check if the placeholder config is still being used for external hosting
+            if (!isCanvasEnvironment && firebaseConfig.apiKey === "YOUR_API_KEY") {
+                 document.getElementById('status-message').innerHTML = '<span class="text-red-600 font-bold">CRITICAL ERROR:</span> You must update the EXTERNAL_FIREBASE_CONFIG in the code with your actual keys!';
+                 return;
+            }
+
             try {
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
@@ -46,7 +76,7 @@
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
                         userId = user.uid;
-                        document.getElementById('user-id-display').textContent = userId + ' (Shared Data)';
+                        document.getElementById('user-id-display').textContent = userId + (isCanvasEnvironment ? ' (Canvas Data)' : ' (External Data)');
                         // Once authenticated, start listening for data
                         startDataListener();
                     } else {
@@ -57,17 +87,24 @@
 
             } catch (error) {
                 console.error("Firebase initialization failed:", error);
-                document.getElementById('status-message').textContent = 'Error: Firebase failed to initialize.';
+                // Display the specific error message to help with debugging
+                document.getElementById('status-message').textContent = `Error: Firebase failed to initialize. Details: ${error.message}`;
             }
         };
 
         const handleAuth = async () => {
             try {
-                if (initialAuthToken) {
+                // Only try to sign in with the custom token if we are in the Canvas environment
+                if (isCanvasEnvironment && initialAuthToken) {
                     await signInWithCustomToken(auth, initialAuthToken);
                 } else {
+                    // For external hosting, we always sign in anonymously
                     await signInAnonymously(auth);
                 }
+                
+                // Update status after successful auth
+                document.getElementById('status-message').textContent = 'Successfully connected to Firebase.';
+
             } catch (error) {
                 console.error("Authentication failed:", error);
                 document.getElementById('status-message').textContent = 'Error: Authentication failed. Check console for details.';
